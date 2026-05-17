@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Map - ศึกยึดฐาน</title>
+
+    <!-- โหลด Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <!-- โหลดระบบแผนที่ฟรี (Leaflet) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body, html { height: 100%; margin: 0; padding: 0; font-family: 'Tahoma', sans-serif; background-color: #1a1a2e; }
+        #map { height: 100%; width: 100%; }
+
+        .info-window { color: #333; min-width: 150px; text-align: center; }
+        .info-window h3 { margin: 0 0 5px 0; color: #333; font-size: 16px; border-bottom: 1px solid #ccc; padding-bottom: 5px;}
+        .info-window p { margin: 5px 0; font-size: 14px; }
+        .status-free { color: #2e8b57; font-weight: bold; }
+        .status-occupied { color: #e94560; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <script>
+        // 1. ใส่ข้อมูล Firebase Config ของคุณตรงนี้ (อย่าลืมเอามาใส่นะครับ)
+        const firebaseConfig = {
+          apiKey: "AIzaSyDvRJocSrbE-nyDQZ3_K2IaoX162ye981w",
+          authDomain: "ctmsabha.firebaseapp.com",
+          projectId: "ctmsabha",
+          storageBucket: "ctmsabha.firebasestorage.app",
+          messagingSenderId: "1088681267872",
+          appId: "1:1088681267872:web:b53ba25fecd4a977f6efc5",
+          measurementId: "G-03K9T81M0T"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // 2. ข้อมูลพิกัดฐานรอบๆ องค์พระปฐมเจดีย์
+        const baseLocations = {
+            'base_01': { lat: 13.820256, lng: 100.060155, name: 'ฐานที่ 1 (ประตูทิศเหนือ)' },
+            'base_02': { lat: 13.819714, lng: 100.062086, name: 'ฐานที่ 2 (ตะวันออก)' },
+            'base_03': { lat: 13.818224, lng: 100.060166, name: 'ฐานที่ 3 (ทิศใต้)' }
+        };
+
+        // 3. ตั้งค่ารูปหมุดสีต่างๆ (เพิ่มหมุดสีน้ำเงินสำหรับผู้เล่น)
+        const greenIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+        const redIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+        const blueIcon = new L.Icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png', shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+
+        // 4. สร้างแผนที่ (ซูมไปที่องค์พระปฐมเจดีย์)
+        const map = L.map('map').setView([13.819746, 100.060135], 17);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
+
+        // --- ระบบ GPS ติดตามตำแหน่งผู้เล่น (เพิ่มใหม่) ---
+        let userMarker = null;
+
+        // สั่งให้ระบบเริ่มค้นหาตำแหน่งมือถือ และอัปเดตตลอดเวลาเมื่อมีการขยับ (watch: true)
+        map.locate({ setView: false, watch: true, enableHighAccuracy: true });
+
+        // เมื่อหาพิกัดเจอ จะทำงานในฟังก์ชันนี้
+        map.on('locationfound', function(e) {
+            if (!userMarker) {
+                // ถ้ายังไม่มีหมุดผู้เล่น ให้สร้างหมุดสีน้ำเงินขึ้นมา
+                userMarker = L.marker(e.latlng, { icon: blueIcon }).addTo(map);
+                userMarker.bindPopup("🚶‍♂️ ตำแหน่งของคุณ").openPopup();
+            } else {
+                // ถ้ามีหมุดแล้ว ให้ขยับหมุดไปตามพิกัดใหม่
+                userMarker.setLatLng(e.latlng);
+            }
+        });
+
+        // ถ้าหาพิกัดไม่เจอ หรือผู้เล่นไม่อนุญาต
+        map.on('locationerror', function(e) {
+            console.warn("ไม่สามารถดึงตำแหน่งได้: ", e.message);
+        });
+        // ---------------------------------------------
+
+        let markers = {};
+
+        // 5. ปักหมุดเริ่มต้นสีเขียวสำหรับฐาน
+        for (const [id, data] of Object.entries(baseLocations)) {
+            markers[id] = L.marker([data.lat, data.lng], { icon: greenIcon }).addTo(map);
+            markers[id].bindPopup(`<div class="info-window"><h3>📍 ${data.name}</h3><p class="status-free">🟢 ยังว่าง</p></div>`);
+        }
+
+        // 6. ดึงข้อมูล Real-time จาก Firebase
+        db.collection("Bases").onSnapshot((snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+                const baseId = change.doc.id;
+                const baseData = change.doc.data();
+
+                if (markers[baseId]) {
+                    if (baseData.status === 'occupied') {
+                        markers[baseId].setIcon(redIcon);
+                        let timeStr = '';
+                        if (baseData.timestamp) {
+                            timeStr = baseData.timestamp.toDate().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        }
+                        markers[baseId].setPopupContent(`<div class="info-window"><h3>📍 ${baseLocations[baseId].name}</h3><p class="status-occupied">🔴 โดนยึดแล้ว!</p><p>เวลาที่ยึด: ${timeStr} น.</p></div>`);
+                    } else {
+                        markers[baseId].setIcon(greenIcon);
+                        markers[baseId].setPopupContent(`<div class="info-window"><h3>📍 ${baseLocations[baseId].name}</h3><p class="status-free">🟢 ยังว่าง</p></div>`);
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
